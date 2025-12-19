@@ -301,6 +301,29 @@ document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
 });
 
+// Function to play beep sound for 10 seconds
+function playBeepForReadyOrders() {
+    try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.setValueAtTime(800, audioContext.currentTime); // 800 Hz beep
+        oscillator.type = 'square';
+
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime); // Moderate volume
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 10); // Fade out over 10 seconds
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 10);
+    } catch (e) {
+        console.error('Error playing beep:', e);
+        // Fallback: try to play a system beep if available
+        try {
+
 function initWebSocket() {
     try {
         const loc = window.location;
@@ -379,6 +402,12 @@ function reloadOrders() {
                 html += '</div>';
                 inProcContainer.innerHTML = html;
             }
+
+            // Play beep if new orders are ready
+            if (ready.length > previousReadyCount) {
+                playBeepForReadyOrders();
+            }
+            previousReadyCount = ready.length;
         })
         .catch(err => console.error('reloadOrders error', err));
 }

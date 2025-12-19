@@ -13,8 +13,10 @@ $stmt = $pdo->prepare("
     SELECT id, display_number, total_amount, status, created_at, updated_at, paid_at
     FROM orders
     WHERE DATE(created_at) = CURDATE()
+    AND teller_terminal_id = 1
     ORDER BY updated_at ASC
 ");
+
 $stmt->execute();
 $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -26,6 +28,7 @@ $prodStmt = $pdo->query("
     ORDER BY name
 ");
 $menuItems = $prodStmt->fetchAll(PDO::FETCH_ASSOC);
+
 ?>
 <!DOCTYPE html>
 <html>

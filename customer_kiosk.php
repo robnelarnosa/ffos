@@ -18,13 +18,36 @@ $categories = $catStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Fetch all active menu items (with category)
 $itemStmt = $pdo->query("
-    SELECT m.id, m.name, m.price, m.image_path, c.name AS category_name, c.id AS category_id
+    SELECT m.id, m.name, m.price, m.image_path, m.is_bundle, c.name AS category_name, c.id AS category_id
     FROM menu_items m
     LEFT JOIN product_categories c ON c.id = m.category_id
     WHERE m.is_active = 1
     ORDER BY c.name, m.name
 ");
 $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Bundle details for "View" modal
+$bundleItemsByBundle = [];
+$stmtDetails = $pdo->query(
+    "SELECT bi.bundle_menu_item_id, bi.menu_item_id, bi.quantity,
+            m.name, m.price
+     FROM bundle_items bi
+     JOIN menu_items m ON m.id = bi.menu_item_id
+     ORDER BY bi.bundle_menu_item_id, m.name"
+);
+while ($row = $stmtDetails->fetch(PDO::FETCH_ASSOC)) {
+    $bid = (int)$row['bundle_menu_item_id'];
+    $mid = (int)$row['menu_item_id'];
+    $qty = (int)$row['quantity'];
+    $price = (float)$row['price'];
+    $bundleItemsByBundle[$bid][] = [
+        'id'       => $mid,
+        'name'     => $row['name'],
+        'quantity' => $qty,
+        'price'    => $price,
+        'subtotal' => $qty * $price
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html>
@@ -33,144 +56,219 @@ $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {
-            background-color: #f3f4f6;
-            font-size: 0.95rem;
-            padding-bottom: 160px; /* space for sticky footer cart */
-        }
+       
+    body {
+        background-color: #a3d6f6ff; /* pastel blue background */
+        font-size: 0.95rem;
+        padding-bottom: 160px;
+        color: #1f2937;
+    }
 
-        .navbar {
-            background-color: #ffffff;
-            border-bottom: 1px solid #e5e7eb;
-        }
+    /* Navbar */
+    .navbar {
+        background-color: #e3f2fd;
+        border-bottom: 1px solid #cfe3f4;
+    }
 
-        .navbar-brand {
-            font-weight: 700;
-            letter-spacing: 0.05em;
-        }
+    .navbar-brand {
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        color: #1e3a8a;
+    }
 
-        .category-list {
-            position: sticky;
-            top: 70px;
-            max-height: calc(100vh - 90px);
-            overflow-y: auto;
-        }
+    /* Category panel */
+    .card {
+        border-radius: 0.75rem;
+        border: 1px solid #cfe3f4;
+        box-shadow: 0 6px 15px rgba(30, 64, 175, 0.08);
+    }
 
-        .category-btn {
-            text-align: left;
-        }
+    .card-header {
+        background-color: #dbeafe;
+        color: #1e40af;
+        font-weight: 600;
+    }
 
-        .product-grid {
-            max-height: calc(100vh - 90px);
-            overflow-y: auto;
-            padding-bottom: 0.5rem;
-        }
+    .category-list {
+        position: sticky;
+        top: 70px;
+        max-height: calc(100vh - 90px);
+        overflow-y: auto;
+    }
 
-        .product-card {
-            border-radius: 0.75rem;
-            overflow: hidden;
-            box-shadow: 0 8px 20px rgba(15,23,42,0.08);
-            border: 1px solid #e5e7eb;
-            position: relative;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-        }
+    .category-btn {
+        text-align: left;
+    }
 
-        .product-img {
-            height: 140px;
-            object-fit: cover;
-            width: 100%;
-        }
+    .btn-primary {
+        background-color: #93c5fd;
+        border-color: #93c5fd;
+        color: #1e3a8a;
+        font-weight: 600;
+    }
 
-        .product-body {
-            padding: 0.6rem 0.75rem 0.75rem;
-            display: flex;
-            flex-direction: column;
-            flex-grow: 1;
-        }
+    .btn-primary:hover {
+        background-color: #7db5fc;
+    }
 
-        .product-name {
-            font-weight: 600;
-            margin-bottom: 0.1rem;
-        }
+    .btn-outline-secondary {
+        border-color: #93c5fd;
+        color: #1e40af;
+    }
 
-        .product-price {
-            font-weight: 700;
-            color: #b91c1c;
-        }
+    .btn-outline-secondary:hover {
+        background-color: #e0f2fe;
+    }
 
-        .category-ribbon {
-            position: absolute;
-            top: 0.45rem;
-            right: -0.3rem;
-            background: #111827;
-            color: #f9fafb;
-            padding: 0.2rem 0.6rem;
-            border-radius: 999px 0 0 999px;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
+    /* Product grid */
+    .product-grid {
+        max-height: calc(100vh - 90px);
+        overflow-y: auto;
+        padding-bottom: 0.5rem;
+    }
 
-        /* Sticky footer cart */
-        .cart-footer {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: #1f2937;
-            color: #f9fafb;
-            padding: 0.5rem 1rem;
-            box-shadow: 0 -4px 15px rgba(15,23,42,0.6);
-            z-index: 1050;
-        }
+    .product-card {
+        border-radius: 0.9rem;
+        overflow: hidden;
+        background-color: #ffffff;
+        box-shadow: 0 10px 25px rgba(30, 64, 175, 0.12);
+        border: 1px solid #cfe3f4;
+        display: flex;
+        flex-direction: column;
+    }
 
-        .cart-summary {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
+    .product-img {
+        height: 140px;
+        object-fit: cover;
+        width: 100%;
+    }
 
-        .cart-items-inline {
-            display: flex;
-            gap: 0.5rem;
-            overflow-x: auto;
-            max-width: 400px;
-        }
+    .product-body {
+        padding: 0.6rem 0.75rem 0.75rem;
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+    }
 
-        .cart-pill {
-            background: #374151;
-            border-radius: 999px;
-            padding: 0.2rem 0.55rem;
-            font-size: 0.8rem;
-            white-space: nowrap;
-        }
+    .product-name {
+        font-weight: 600;
+        color: #1e3a8a;
+    }
 
-        .cart-pill strong {
-            color: #fbbf24;
-        }
+    .product-price {
+        font-weight: 700;
+        color: #2563eb;
+    }
 
-        .cart-total {
-            font-size: 1.1rem;
-            font-weight: 700;
-        }
+    /* Ribbons */
+    .category-ribbon {
+        position: absolute;
+        top: 0.45rem;
+        right: -0.3rem;
+        background: #60a5fa;
+        color: #ffffff;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px 0 0 999px;
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+    }
 
-        @media (max-width: 768px) {
-            .cart-summary {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-        }
+    .bundle-ribbon {
+        position: absolute;
+        top: 0.45rem;
+        left: -0.3rem;
+        background: #93c5fd;
+        color: #1e3a8a;
+        padding: 0.2rem 0.6rem;
+        border-radius: 0 999px 999px 0;
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+    }
 
-        /* Cart modal */
-        .modal-cart-table thead th {
-            position: sticky;
-            top: 0;
-            background-color: #f9fafb;
-            z-index: 5;
-        }
-    </style>
+    /* Buttons */
+    .btn-success {
+        background-color: #bfdbfe;
+        border-color: #bfdbfe;
+        color: #1e40af;
+        font-weight: 600;
+    }
+
+    .btn-success:hover {
+        background-color: #a5c8fd;
+    }
+
+    .btn-outline-info {
+        border-color: #93c5fd;
+        color: #1e40af;
+    }
+
+    .btn-outline-info:hover {
+        background-color: #e0f2fe;
+    }
+
+    /* Sticky Cart Footer */
+    .cart-footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #dbeafe;
+        color: #1e3a8a;
+        padding: 0.6rem 1rem;
+        box-shadow: 0 -4px 20px rgba(30, 64, 175, 0.25);
+        z-index: 1050;
+    }
+
+    .cart-pill {
+        background: #bfdbfe;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.8rem;
+        white-space: nowrap;
+        color: #1e3a8a;
+    }
+
+    .cart-pill strong {
+        color: #1d4ed8;
+    }
+
+    .cart-total {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #1e40af;
+    }
+
+    /* Modals */
+    .modal-content {
+        border-radius: 1rem;
+        border: 1px solid #cfe3f4;
+    }
+
+    .modal-header {
+        background-color: #dbeafe;
+        color: #1e40af;
+    }
+
+    .modal-cart-table thead th {
+        position: sticky;
+        top: 0;
+        background-color: #e0f2fe;
+        z-index: 5;
+    }
+    #submitOrderBtn {
+    background-color: #5884e2ff; /* custom blue */
+    color: white;
+    
+}
+   
+
+
+}
+
+</style>
+
+
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-light mb-2">
@@ -197,6 +295,11 @@ $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
                                 onclick="filterCategory('ALL')">
                             All
                         </button>
+                        <button class="btn btn-sm btn-outline-secondary category-btn"
+                                data-category="BUNDLES"
+                                onclick="filterCategory('BUNDLES')">
+                            Bundles
+                        </button>
                         <?php foreach ($categories as $c): ?>
                             <button class="btn btn-sm btn-outline-secondary category-btn"
                                     data-category="<?= (int)$c['id'] ?>"
@@ -215,13 +318,9 @@ $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="row g-3" id="productsContainer">
                     <?php foreach ($items as $p): ?>
                         <div class="col-sm-6 col-md-4 col-lg-3 product-card-wrapper"
-                             data-category-id="<?= (int)($p['category_id'] ?? 0) ?>">
+                             data-category-id="<?= (int)($p['category_id'] ?? 0) ?>"
+                             data-is-bundle="<?= (int)$p['is_bundle'] ?>">
                             <div class="product-card">
-                                <?php if (!empty($p['category_name'])): ?>
-                                    <div class="category-ribbon">
-                                        <?= htmlspecialchars($p['category_name']) ?>
-                                    </div>
-                                <?php endif; ?>
                                 <?php if (!empty($p['image_path']) && file_exists($p['image_path'])): ?>
                                     <img src="<?= htmlspecialchars($p['image_path']) ?>"
                                          class="product-img"
@@ -236,7 +335,15 @@ $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
                                     <div class="product-price mb-2">
                                         ₱<?= number_format((float)$p['price'], 2) ?>
                                     </div>
-                                    <div class="mt-auto d-grid">
+                                    <div class="mt-auto d-grid gap-1">
+                                        <?php if ((int)$p['is_bundle'] === 1): ?>
+                                            <button class="btn btn-sm btn-outline-info"
+                                                    data-bs-toggle="modal"
+                                                    data-bs-target="#bundleDetailsModal"
+                                                    onclick="showBundleDetails(<?= (int)$p['id'] ?>, '<?= htmlspecialchars($p['name'] ?? '', ENT_QUOTES) ?>')">
+                                                View Details
+                                            </button>
+                                        <?php endif; ?>
                                         <button class="btn btn-sm btn-success"
                                                 onclick="addToCart(
                                                     <?= (int)$p['id'] ?>,
@@ -334,10 +441,81 @@ $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
   </div>
 </div>
 
+<!-- Bundle Details Modal -->
+<div class="modal fade" id="bundleDetailsModal" tabindex="-1" aria-labelledby="bundleDetailsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h5 class="modal-title" id="bundleDetailsModalLabel">Bundle Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-2">
+        <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+            <table class="table table-sm align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Item</th>
+                        <th class="text-center" style="width:80px;">Qty</th>
+                        <th class="text-end" style="width:100px;">Price</th>
+                        <th class="text-end" style="width:100px;">Subtotal</th>
+                    </tr>
+                </thead>
+                <tbody id="bundleDetailsBody">
+                    <!-- filled by JS -->
+                </tbody>
+            </table>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <div class="me-auto">
+            <strong>Bundle Total: ₱<span id="bundleDetailsTotal">0.00</span></strong>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 let currentCategoryFilter = 'ALL';
 let cart = {}; // id -> {id, name, price, qty, category}
+let ws = null;
+
+// Bundle details data from PHP
+const bundleItemsByBundle = <?= json_encode($bundleItemsByBundle) ?>;
+
+// Connect to WebSocket for real-time updates
+function connectWebSocket() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+
+    ws = new WebSocket('ws://' + window.location.hostname + ':8080');
+
+    ws.onopen = function(event) {
+        console.log('Connected to WebSocket');
+    };
+
+    ws.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'menu_updated') {
+                console.log('Menu updated, refreshing...');
+                location.reload(); // Simple refresh for now
+            }
+        } catch (e) {
+            console.error('Error parsing WS message:', e);
+        }
+    };
+
+    ws.onclose = function(event) {
+        console.log('WebSocket closed, reconnecting in 5s...');
+        setTimeout(connectWebSocket, 5000);
+    };
+
+    ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+    };
+}
 
 function filterCategory(catId) {
     currentCategoryFilter = catId;
@@ -358,7 +536,16 @@ function filterCategory(catId) {
 
     document.querySelectorAll('#productsContainer .product-card-wrapper').forEach(card => {
         const itemCat = card.dataset.categoryId || '0';
-        if (catId === 'ALL' || catId === itemCat) {
+        const isBundle = card.dataset.isBundle === '1';
+        let show = false;
+        if (catId === 'ALL') {
+            show = true;
+        } else if (catId === 'BUNDLES') {
+            show = isBundle;
+        } else {
+            show = catId === itemCat;
+        }
+        if (show) {
             card.classList.remove('d-none');
         } else {
             card.classList.add('d-none');
@@ -483,6 +670,8 @@ function submitOrder() {
 
     const fd = new FormData();
     fd.append('items', JSON.stringify(payload));
+    // CSRF Protection: Include CSRF token in form submission
+    fd.append('csrf_token', '<?= get_csrf_token() ?>');
 
     fetch('api_create_order.php', {
         method: 'POST',

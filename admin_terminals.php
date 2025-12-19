@@ -37,6 +37,90 @@ $terminals = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <head>
     <title>Terminal Management</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #e0f2fe; /* Pastel blue background */
+        }
+        .navbar {
+            background-color: #bae6fd !important; /* Soft blue navbar */
+            border-bottom: 2px solid #7dd3fc;
+        }
+        .navbar-brand {
+            color: #1e40af !important; /* Darker blue for text */
+            font-weight: 600;
+        }
+        .btn-outline-light {
+            border-color: #1e40af;
+            color: #1e40af;
+        }
+        .btn-outline-light:hover {
+            background-color: #1e40af;
+            border-color: #1e40af;
+        }
+        .card {
+            background-color: #f0f9ff; /* Very light blue card */
+            border: 1px solid #bae6fd;
+        }
+        .card-header {
+            background-color: #bae6fd !important; /* Soft blue header */
+            color: #1e40af !important;
+            border-bottom: 1px solid #7dd3fc;
+        }
+        .card-body {
+            color: #1e40af;
+        }
+        .form-label {
+            color: #1e40af;
+            font-weight: 500;
+        }
+        .form-control {
+            border-color: #bae6fd;
+            background-color: #f0f9ff;
+            color: #1e40af;
+        }
+        .form-control:focus {
+            border-color: #7dd3fc;
+            box-shadow: 0 0 0 0.2rem rgba(186, 230, 253, 0.25);
+        }
+        .form-select {
+            border-color: #bae6fd;
+            background-color: #f0f9ff;
+            color: #1e40af;
+        }
+        .btn-danger {
+            background-color: #1e40af;
+            border-color: #1e40af;
+        }
+        .btn-danger:hover {
+            background-color: #0f172a;
+            border-color: #0f172a;
+        }
+        .btn-outline-primary {
+            border-color: #1e40af;
+            color: #1e40af;
+        }
+        .btn-outline-primary:hover {
+            background-color: #1e40af;
+            border-color: #1e40af;
+        }
+        .table {
+            color: #1e40af;
+        }
+        .table-light th {
+            background-color: #f0f9ff !important;
+            color: #1e40af;
+            border-color: #bae6fd;
+        }
+        .table-striped tbody tr:nth-of-type(odd) {
+            background-color: #f0f9ff;
+        }
+        .badge {
+            background-color: #1e40af !important;
+        }
+        .text-muted {
+            color: #64748b !important;
+        }
+    </style>
 </head>
 <body class="bg-light">
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-3">

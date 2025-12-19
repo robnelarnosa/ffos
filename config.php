@@ -22,6 +22,22 @@ try {
 
 	define('ADMIN_PASS', 'admin123'); // change this
 
+// ---- CSRF Protection ----
+// Generate CSRF token for session if not exists
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Function to get current CSRF token
+function get_csrf_token(): string {
+    return $_SESSION['csrf_token'];
+}
+
+// Function to validate CSRF token
+function validate_csrf_token(string $token): bool {
+    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+}
+
 // ---- WebSocket push bridge ----
 // Make sure this function is defined ONLY ONCE.
 if (!function_exists('send_ws_message')) {

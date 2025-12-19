@@ -39,8 +39,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <title>Terminal Login</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #e0f2fe; /* Pastel blue background */
+            min-height: 100vh;
+        }
+        .card {
+            background-color: #f0f9ff; /* Very light blue card */
+            border: 1px solid #bae6fd;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .card-body {
+            color: #1e40af;
+        }
+        .card-body h2 {
+            color: #1e40af;
+            font-weight: 600;
+        }
+        .form-label {
+            color: #1e40af;
+            font-weight: 500;
+        }
+        .form-control {
+            border-color: #bae6fd;
+            background-color: #f0f9ff;
+            color: #1e40af;
+            font-size: 1.25rem;
+        }
+        .form-control:focus {
+            border-color: #7dd3fc;
+            box-shadow: 0 0 0 0.2rem rgba(186, 230, 253, 0.25);
+        }
+        .btn-warning {
+            background-color: #1e40af;
+            border-color: #1e40af;
+        }
+        .btn-warning:hover {
+            background-color: #0f172a;
+            border-color: #0f172a;
+        }
+        .alert-danger {
+            background-color: #fecaca;
+            border-color: #fca5a5;
+            color: #dc2626;
+        }
+        .text-decoration-none {
+            color: #1e40af;
+        }
+        .text-decoration-none:hover {
+            color: #0f172a;
+        }
+    </style>
 </head>
-<body class="bg-light d-flex align-items-center" style="min-height:100vh;">
+<body class="d-flex align-items-center" style="min-height:100vh;">
 <div class="container">
     <div class="row justify-content-center">
         <div class="col-md-4">

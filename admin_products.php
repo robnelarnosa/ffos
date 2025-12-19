@@ -1,5 +1,8 @@
 <?php
 require_once 'config.php';
+header("Cache-Control: no-cache, no-store, must-revalidate");
+header("Pragma: no-cache");
+header("Expires: 0");
 if (empty($_SESSION['admin'])) {
     header('Location: admin_login.php');
     exit;
@@ -38,6 +41,16 @@ function handle_image_upload(string $fieldName): ?string
     return 'uploads/' . $newName;
 }
 
+// Function to notify WebSocket clients of menu updates
+function notifyMenuUpdate() {
+    $payload = json_encode(['type' => 'menu_updated']);
+    $fp = @fsockopen('127.0.0.1', 9001, $errno, $errstr, 1);
+    if ($fp) {
+        fwrite($fp, $payload . "\n");
+        fclose($fp);
+    }
+}
+
 // --- Handle POST actions (create/edit for category/product/bundle) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -48,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($name !== '') {
             $stmt = $pdo->prepare("INSERT INTO product_categories (name) VALUES (?)");
             $stmt->execute([$name]);
+            notifyMenuUpdate();
         }
     }
 
@@ -58,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($id > 0 && $name !== '') {
             $stmt = $pdo->prepare("UPDATE product_categories SET name = ? WHERE id = ?");
             $stmt->execute([$name, $id]);
+            notifyMenuUpdate();
         }
     }
 
@@ -76,6 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  VALUES (?, ?, 0, ?, ?, ?, 1)"
             );
             $stmt->execute([$code, $categoryId, $name, $price, $imagePath]);
+            notifyMenuUpdate();
         }
     }
 
@@ -100,6 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  WHERE id = ? AND is_bundle = 0"
             );
             $stmt->execute([$code, $categoryId, $name, $price, $imagePath, $id]);
+            notifyMenuUpdate();
         }
     }
 
@@ -110,43 +127,125 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $selectedProd = $_POST['bundle_items'] ?? []; // array of product IDs
         $quantities   = $_POST['bundle_qty'] ?? [];   // keyed by product ID
 
-        if ($bundleName !== '' && $bundleCode !== '' && !empty($selectedProd)) {
-            $ids = array_map('intval', $selectedProd);
-            $in  = implode(',', $ids);
+        // Input validation
+        if ($bundleName === '' || $bundleCode === '') {
+            // Handle validation error - required fields missing
+            header('Location: admin_products.php?error=missing_fields');
+            exit;
+        }
 
-            $stmt = $pdo->query("SELECT id, price FROM menu_items WHERE id IN ($in) AND is_bundle = 0");
+        if (!is_array($selectedProd) || !is_array($quantities) || empty($selectedProd)) {
+            // Handle validation error - invalid product selection
+            header('Location: admin_products.php?error=no_products');
+            exit;
+        }
+
+        // Sanitize and validate product IDs
+        $ids = array_filter(array_map('intval', $selectedProd));
+        if (empty($ids)) {
+            header('Location: admin_products.php?error=invalid_products');
+            exit;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            // Check if bundle code already exists
+            $checkStmt = $pdo->prepare("SELECT id FROM menu_items WHERE code = ? AND is_bundle = 1");
+            $checkStmt->execute([$bundleCode]);
+            if ($checkStmt->fetch()) {
+                $pdo->rollBack();
+                header('Location: admin_products.php?error=duplicate_code');
+                exit;
+            }
+
+            // Fetch product prices securely using prepared statement
+            $placeholders = str_repeat('?,', count($ids) - 1) . '?';
+            $stmt = $pdo->prepare("SELECT id, price FROM menu_items WHERE id IN ($placeholders) AND is_bundle = 0");
+            $stmt->execute($ids);
+
             $prices = [];
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $prices[$row['id']] = (float)$row['price'];
             }
 
+            // Validate all selected products exist and calculate total
             $total = 0;
             $bundleComponents = [];
+            $invalidProducts = [];
+
             foreach ($ids as $pid) {
-                $qty = max(1, (int)($quantities[$pid] ?? 1));
-                if (!isset($prices[$pid])) continue;
-                $total += $prices[$pid] * $qty;
-                $bundleComponents[] = ['id' => $pid, 'qty' => $qty];
-            }
-
-            if ($total > 0 && !empty($bundleComponents)) {
-                $imagePath = handle_image_upload('bundle_image');
-
-                $stmt = $pdo->prepare(
-                    "INSERT INTO menu_items (code, category_id, is_bundle, name, price, image_path, is_active)
-                     VALUES (?, NULL, 1, ?, ?, ?, 1)"
-                );
-                $stmt->execute([$bundleCode, $bundleName, $total, $imagePath]);
-                $bundleMenuId = (int)$pdo->lastInsertId();
-
-                $stmtItem = $pdo->prepare(
-                    "INSERT INTO bundle_items (bundle_menu_item_id, menu_item_id, quantity)
-                     VALUES (?, ?, ?)"
-                );
-                foreach ($bundleComponents as $comp) {
-                    $stmtItem->execute([$bundleMenuId, $comp['id'], $comp['qty']]);
+                if (!isset($prices[$pid])) {
+                    $invalidProducts[] = $pid;
+                    continue;
                 }
+
+                $qty = max(1, (int)($quantities[$pid] ?? 1));
+                if ($qty <= 0) $qty = 1; // Ensure positive quantity
+
+                $price = $prices[$pid];
+                if ($price <= 0) {
+                    $invalidProducts[] = $pid;
+                    continue;
+                }
+
+                $total += $price * $qty;
+                $bundleComponents[] = ['id' => $pid, 'qty' => $qty, 'price' => $price];
             }
+
+            // Check for invalid products
+            if (!empty($invalidProducts)) {
+                $pdo->rollBack();
+                header('Location: admin_products.php?error=invalid_products');
+                exit;
+            }
+
+            if ($total <= 0 || empty($bundleComponents)) {
+                $pdo->rollBack();
+                header('Location: admin_products.php?error=no_valid_items');
+                exit;
+            }
+
+            // Handle image upload
+            $imagePath = handle_image_upload('bundle_image');
+
+            // Insert into bundles table
+            $stmt = $pdo->prepare("INSERT INTO bundles (name, price, is_active) VALUES (?, ?, 1)");
+            $stmt->execute([$bundleName, $total]);
+            $bundleId = (int)$pdo->lastInsertId();
+
+            // Insert bundle main record into menu_items
+            $stmt = $pdo->prepare(
+                "INSERT INTO menu_items (code, category_id, is_bundle, name, price, image_path, is_active)
+                 VALUES (?, NULL, 1, ?, ?, ?, 1)"
+            );
+            $stmt->execute([$bundleCode, $bundleName, $total, $imagePath]);
+            $bundleMenuId = (int)$pdo->lastInsertId();
+
+            // Insert bundle components
+            $stmtItem = $pdo->prepare(
+                "INSERT INTO bundle_items (bundle_id, bundle_menu_item_id, menu_item_id, quantity)
+                 VALUES (?, ?, ?, ?)"
+            );
+            foreach ($bundleComponents as $comp) {
+                $stmtItem->execute([$bundleId, $bundleMenuId, $comp['id'], $comp['qty']]);
+            }
+
+            $pdo->commit();
+            notifyMenuUpdate();
+
+            // Success - redirect with success message
+            header('Location: admin_products.php?success=bundle_created');
+            exit;
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            // Log error and redirect with detailed error message
+            error_log("Bundle creation error: " . $e->getMessage());
+            header('Location: admin_products.php?error=creation_failed_detailed&msg=' . urlencode($e->getMessage()));
+            exit;
         }
     }
 
@@ -184,7 +283,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $imagePath = $existingImg;
                 }
 
-                // Update main bundle record
+                // Get the bundle_id from bundle_items
+                $stmtBundleId = $pdo->prepare("SELECT bundle_id FROM bundle_items WHERE bundle_menu_item_id = ? LIMIT 1");
+                $stmtBundleId->execute([$bundleId]);
+                $bundleIdFromItems = $stmtBundleId->fetchColumn();
+
+                if ($bundleIdFromItems) {
+                    // Update bundles table
+                    $stmt = $pdo->prepare("UPDATE bundles SET name = ?, price = ? WHERE id = ?");
+                    $stmt->execute([$bundleName, $total, $bundleIdFromItems]);
+                }
+
+                // Update main bundle record in menu_items
                 $stmt = $pdo->prepare(
                     "UPDATE menu_items
                      SET code = ?, name = ?, price = ?, image_path = ?
@@ -197,12 +307,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmtDel->execute([$bundleId]);
 
                 $stmtItem = $pdo->prepare(
-                    "INSERT INTO bundle_items (bundle_menu_item_id, menu_item_id, quantity)
-                     VALUES (?, ?, ?)"
+                    "INSERT INTO bundle_items (bundle_id, bundle_menu_item_id, menu_item_id, quantity)
+                     VALUES (?, ?, ?, ?)"
                 );
                 foreach ($bundleComponents as $comp) {
-                    $stmtItem->execute([$bundleId, $comp['id'], $comp['qty']]);
+                    $stmtItem->execute([$bundleIdFromItems, $bundleId, $comp['id'], $comp['qty']]);
                 }
+                notifyMenuUpdate();
+            }
+        }
+    }
+
+    // Delete bundle
+    if ($action === 'delete_bundle') {
+        $bundleId = (int)($_POST['bundle_id'] ?? 0);
+        if ($bundleId > 0) {
+            try {
+                $pdo->beginTransaction();
+
+                // Get the bundle_id from bundle_items to delete from bundles table
+                $stmtBundleId = $pdo->prepare("SELECT bundle_id FROM bundle_items WHERE bundle_menu_item_id = ? LIMIT 1");
+                $stmtBundleId->execute([$bundleId]);
+                $bundleIdFromItems = $stmtBundleId->fetchColumn();
+
+                // Delete from bundle_items
+                $stmtDelItems = $pdo->prepare("DELETE FROM bundle_items WHERE bundle_menu_item_id = ?");
+                $stmtDelItems->execute([$bundleId]);
+
+                // Delete from bundles table if exists
+                if ($bundleIdFromItems) {
+                    $stmtDelBundle = $pdo->prepare("DELETE FROM bundles WHERE id = ?");
+                    $stmtDelBundle->execute([$bundleIdFromItems]);
+                }
+
+                // Delete from menu_items
+                $stmtDelMenu = $pdo->prepare("DELETE FROM menu_items WHERE id = ? AND is_bundle = 1");
+                $stmtDelMenu->execute([$bundleId]);
+
+                $pdo->commit();
+                notifyMenuUpdate();
+
+                // Success - redirect with success message
+                header('Location: admin_products.php?success=bundle_deleted');
+                exit;
+
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                // Log error and redirect with error message
+                error_log("Bundle deletion error: " . $e->getMessage());
+                header('Location: admin_products.php?error=deletion_failed');
+                exit;
             }
         }
     }
@@ -263,15 +419,143 @@ $stats = [
 <head>
     <title>Products Management</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-	<style>
-		/* Sticky table headers for scrollable table containers */
-		.table-sticky-header thead th {
-			position: sticky;
-			top: 0;
-			z-index: 2;
-			background-color: #f8f9fa; /* same as .table-light */
-		}
-	</style>
+	
+<style>
+
+
+/* Page background */
+body {
+    background-color: #f4f9fd !important; /* very light pastel blue */
+}
+
+/* Navbar */
+.navbar.bg-dark {
+    background-color: #6fa8dc !important; /* pastel blue */
+}
+
+/* Cards */
+.card {
+    border: none;
+    border-radius: 12px;
+}
+
+.card-header {
+    border-bottom: none;
+    font-weight: 600;
+}
+
+/* Card header colors */
+.card-header.bg-secondary {
+    background-color: #9fc5e8 !important;
+    color: #083358 !important;
+}
+
+.card-header.bg-warning {
+    background-color: #cfe2f3 !important;
+    color: #083358 !important;
+}
+
+.card-header.bg-info {
+    background-color: #b6d7f2 !important;
+    color: #083358 !important;
+}
+
+.card-header.bg-success {
+    background-color: #a4c2f4 !important;
+    color: #083358 !important;
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: #6fa8dc;
+    border-color: #6fa8dc;
+}
+
+.btn-primary:hover {
+    background-color: #5b9bd5;
+    border-color: #5b9bd5;
+}
+
+.btn-outline-primary {
+    color: #6fa8dc;
+    border-color: #6fa8dc;
+}
+
+.btn-outline-primary:hover {
+    background-color: #6fa8dc;
+    color: #fff;
+}
+
+.btn-danger {
+    background-color: #f4cccc;
+    border-color: #f4cccc;
+    color: #7a1f1f;
+}
+
+.btn-danger:hover {
+    background-color: #ea9999;
+    border-color: #ea9999;
+}
+
+/* Tables */
+.table thead th {
+    background-color: #eaf2fb !important;
+    color: #083358;
+}
+
+.table tbody tr:hover {
+    background-color: #f0f6fc;
+}
+
+/* Badges */
+.badge.bg-primary {
+    background-color: #6fa8dc !important;
+}
+
+.badge.bg-success {
+    background-color: #9fc5e8 !important;
+    color: #083358;
+}
+
+.badge.bg-warning {
+    background-color: #cfe2f3 !important;
+    color: #083358;
+}
+
+/* Modals */
+.modal-content {
+    border-radius: 14px;
+}
+
+.modal-header {
+    background-color: #eaf2fb;
+    border-bottom: none;
+}
+
+.modal-footer {
+    border-top: none;
+}
+
+/* Inputs */
+.form-control,
+.form-select {
+    border-radius: 8px;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: #6fa8dc;
+    box-shadow: 0 0 0 0.15rem rgba(111, 168, 220, 0.3);
+}
+
+/* Sticky table header fix (keep yours) */
+.table-sticky-header thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background-color: #eaf2fb;
+}
+</style>
 </head>
 <body class="bg-light" style="font-size:0.875rem;">
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-3">
@@ -282,6 +566,55 @@ $stats = [
 </nav>
 
 <div class="container mb-1">
+
+    <!-- SUCCESS/ERROR MESSAGES -->
+    <?php if (isset($_GET['success'])): ?>
+        <div class="alert alert-success alert-dismissible fade show" role="alert">
+            <strong>Success!</strong>
+            <?php if ($_GET['success'] === 'bundle_created'): ?>
+                Bundle has been created successfully.
+            <?php elseif ($_GET['success'] === 'bundle_deleted'): ?>
+                Bundle has been deleted successfully.
+            <?php endif; ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    <?php endif; ?>
+
+    <?php if (isset($_GET['error'])): ?>
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <strong>Error!</strong>
+            <?php
+            $errorMsg = '';
+            switch ($_GET['error']) {
+                case 'missing_fields':
+                    $errorMsg = 'Please fill in all required fields.';
+                    break;
+                case 'no_products':
+                    $errorMsg = 'Please select at least one product for the bundle.';
+                    break;
+                case 'invalid_products':
+                    $errorMsg = 'Some selected products are invalid or do not exist.';
+                    break;
+                case 'duplicate_code':
+                    $errorMsg = 'A bundle with this code already exists.';
+                    break;
+                case 'no_valid_items':
+                    $errorMsg = 'No valid items found for the bundle.';
+                    break;
+                case 'creation_failed':
+                    $errorMsg = 'Failed to create bundle. Please try again.';
+                    break;
+                case 'creation_failed_detailed':
+                    $errorMsg = 'Failed to create bundle: ' . htmlspecialchars($_GET['msg'] ?? 'Unknown error');
+                    break;
+                default:
+                    $errorMsg = 'An unknown error occurred.';
+            }
+            echo htmlspecialchars($errorMsg);
+            ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    <?php endif; ?>
 
     <!-- ROW 1: Insights + Products -->
     <div class="row g-3 mb-4">
@@ -461,24 +794,30 @@ $stats = [
                                     <td><span class="badge bg-secondary"><?= htmlspecialchars($b['code'] ?? '') ?></span></td>
                                     <td class="text-end">₱<?= number_format((float)$b['price'], 2) ?></td>
                                     <td class="text-end">
-                                        <button type="button" class="btn btn-sm btn-outline-info me-1"
-                                                onclick="openBundleViewModal(
-                                                    <?= (int)$b['id'] ?>,
-                                                    '<?= htmlspecialchars($b['name'] ?? '', ENT_QUOTES) ?>',
-                                                    '<?= htmlspecialchars($b['code'] ?? '', ENT_QUOTES) ?>',
-                                                    <?= (float)$b['price'] ?>
-                                                )">
-                                            View
-                                        </button>
-                                        <button type="button" class="btn btn-sm btn-outline-primary"
-                                                onclick="openBundleModal('edit',
-                                                    <?= (int)$b['id'] ?>,
-                                                    '<?= htmlspecialchars($b['name'] ?? '', ENT_QUOTES) ?>',
-                                                    '<?= htmlspecialchars($b['code'] ?? '', ENT_QUOTES) ?>',
-                                                    '<?= htmlspecialchars($b['image_path'] ?? '', ENT_QUOTES) ?>'
-                                                )">
-                                            Edit
-                                        </button>
+                                        <div class="d-flex justify-content-end gap-1">
+                                            <button type="button" class="btn btn-sm btn-outline-info"
+                                                    onclick="openBundleViewModal(
+                                                        <?= (int)$b['id'] ?>,
+                                                        '<?= htmlspecialchars($b['name'] ?? '', ENT_QUOTES) ?>',
+                                                        '<?= htmlspecialchars($b['code'] ?? '', ENT_QUOTES) ?>',
+                                                        <?= (float)$b['price'] ?>
+                                                    )">
+                                                View
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                                    onclick="openBundleModal('edit',
+                                                        <?= (int)$b['id'] ?>,
+                                                        '<?= htmlspecialchars($b['name'] ?? '', ENT_QUOTES) ?>',
+                                                        '<?= htmlspecialchars($b['code'] ?? '', ENT_QUOTES) ?>',
+                                                        '<?= htmlspecialchars($b['image_path'] ?? '', ENT_QUOTES) ?>'
+                                                    )">
+                                                Edit
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-danger"
+                                                    onclick="deleteBundle(<?= (int)$b['id'] ?>, '<?= htmlspecialchars($b['name'] ?? '', ENT_QUOTES) ?>')">
+                                                Delete
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -944,6 +1283,20 @@ function openBundleViewModal(id, name, code, total) {
     }
 
     bundleViewModal.show();
+}
+
+// --- Delete bundle ---
+function deleteBundle(id, name) {
+    if (confirm(`Are you sure you want to delete the bundle "${name}"? This action cannot be undone.`)) {
+        const form = document.createElement('form');
+        form.method = 'post';
+        form.innerHTML = `
+            <input type="hidden" name="action" value="delete_bundle">
+            <input type="hidden" name="bundle_id" value="${id}">
+        `;
+        document.body.appendChild(form);
+        form.submit();
+    }
 }
 </script>
 </body>
